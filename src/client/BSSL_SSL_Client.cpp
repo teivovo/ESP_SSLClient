@@ -305,7 +305,6 @@ size_t BSSL_SSL_Client::write(const uint8_t *buf, size_t size)
             _write_idx = 0;
             // write to the socket immediatly
             if (mRunUntil(BR_SSL_SENDAPP) < 0)
-            {
 #if defined(ENABLE_DEBUG)
                 esp_ssl_debug_print(PSTR("Failed while waiting for the engine to enter BR_SSL_SENDAPP."), _debug_level, esp_ssl_debug_error, func_name);
 #endif
@@ -1001,6 +1000,8 @@ void BSSL_SSL_Client::peekConsume(size_t consume)
 
 void BSSL_SSL_Client::setCACert(const char *rootCA)
 {
+    // Reset W5500 workaround counter
+    _w5500_workaround_counter = 0;
     if (_esp32_ta)
         delete _esp32_ta;
     _esp32_ta = new X509List(rootCA);
@@ -1091,6 +1092,8 @@ unsigned int BSSL_SSL_Client::getTimeout() const { return _timeout_ms; }
 
 void BSSL_SSL_Client::setSecure(const char *rootCABuff, const char *cli_cert, const char *cli_key)
 {
+    // Reset W5500 workaround counter
+    _w5500_workaround_counter = 0;
     if (_esp32_ta)
     {
         delete _esp32_ta;
@@ -1614,7 +1617,6 @@ bool BSSL_SSL_Client::mCheckSessionTimeout()
 #endif
             int ret = 0;
             if (!_secure)
-            {
                 _basic_client->flush();
                 _basic_client->stop();
 
@@ -1624,7 +1626,6 @@ bool BSSL_SSL_Client::mCheckSessionTimeout()
                     ret = connect(_host.c_str(), _port);
             }
             else
-            {
                 stop();
                 if (_connect_with_ip)
                     ret = connectSSL(_ip, _port);
@@ -1633,7 +1634,6 @@ bool BSSL_SSL_Client::mCheckSessionTimeout()
             }
 
             if (!ret)
-            {
 #if defined(ENABLE_DEBUG)
                 esp_ssl_debug_print(PSTR("Failed while starting new server connection."), _debug_level, esp_ssl_debug_error, func_name);
 #endif
@@ -1688,7 +1688,6 @@ int BSSL_SSL_Client::mRunUntil(const unsigned target, unsigned long timeout)
             size_t len;
             br_ssl_engine_recvrec_buf(_eng, &len);
             if (lastLen != len)
-            {
                 lastLen = len;
 #if defined(ENABLE_DEBUG)
                 String s = PSTR("Expected bytes count: ");
@@ -1717,7 +1716,6 @@ int BSSL_SSL_Client::mRunUntil(const unsigned target, unsigned long timeout)
         {
             _recvapp_buf = br_ssl_engine_recvapp_buf(_eng, &_recvapp_len);
             if (_recvapp_buf != nullptr)
-            {
                 // if application data is ready in buffer, don't ignore, just return.
 
                 // _write_idx = 0;
@@ -1727,7 +1725,6 @@ int BSSL_SSL_Client::mRunUntil(const unsigned target, unsigned long timeout)
                 return 0;
             }
             else
-            {
 #if defined(ENABLE_DEBUG)
                 esp_ssl_debug_print(PSTR("SSL engine state is RECVAPP, however the buffer was null! (This is a problem with BearSSL internals)."), _debug_level, esp_ssl_debug_error, __func__);
 #endif
@@ -1786,7 +1783,17 @@ unsigned BSSL_SSL_Client::mUpdateEngine()
             wlen = _basic_client->write(buf, len);
             _basic_client->flush();
             if (wlen <= 0)
-            {
+                // W5500 workaround: Handle false negative -1 returns during handshake
+#if defined(_W5500_H_) || defined(W5500_WORKAROUND)
+                if (wlen == -1 && _w5500_workaround_counter < 200)
+                {
+                    _w5500_workaround_counter++;
+#if defined(ENABLE_DEBUG)
+                    esp_ssl_debug_print(PSTR("W5500 workaround: treating -1 as non-error, attempt "), _debug_level, esp_ssl_debug_info, __func__);
+#endif
+                    continue; // Treat -1 as a non-error for up to 200 iterations
+                }
+#endif
                 // if the arduino client encountered an error
                 if (_basic_client->getWriteError() || !_basic_client->connected())
                 {
@@ -1801,6 +1808,8 @@ unsigned BSSL_SSL_Client::mUpdateEngine()
             }
             if (wlen > 0)
             {
+                // Reset W5500 workaround counter on successful write
+                _w5500_workaround_counter = 0;
                 br_ssl_engine_sendrec_ack(_eng, wlen);
             }
             continue;
@@ -1815,7 +1824,6 @@ unsigned BSSL_SSL_Client::mUpdateEngine()
             // if we've reached the point where BR_SSL_SENDAPP is off but
             // data has been written to the io buffer, something is wrong
             if (!(state & BR_SSL_SENDAPP))
-            {
 #if defined(ENABLE_DEBUG)
                 esp_ssl_debug_print(PSTR("Error _write_idx > 0 but the ssl engine is not ready for data."), _debug_level, esp_ssl_debug_error, __func__);
 #endif
@@ -1825,7 +1833,6 @@ unsigned BSSL_SSL_Client::mUpdateEngine()
             }
             // else time to send the application data
             else if (state & BR_SSL_SENDAPP)
-            {
                 size_t alen;
                 const unsigned char *buf = br_ssl_engine_sendapp_buf(_eng, &alen);
                 // engine check
@@ -1874,7 +1881,6 @@ unsigned BSSL_SSL_Client::mUpdateEngine()
             // do we have the record you're looking for?
             const auto avail = _basic_client->available();
             if (avail > 0)
-            {
                 // I suppose so!
                 int rlen = _basic_client->read(buf, avail < (int)len ? avail : (int)len);
                 if (rlen <= 0)
@@ -1896,7 +1902,6 @@ unsigned BSSL_SSL_Client::mUpdateEngine()
             }
             // guess not, tell the state we're waiting still
             else
-            {
 
 #if defined __has_include
 #if __has_include(<Ethernet.h>)
@@ -2012,6 +2017,8 @@ void BSSL_SSL_Client::mClearAuthenticationSettings()
     _use_self_signed = false;
     _knownkey = nullptr;
     _ta = nullptr;
+    // Reset W5500 workaround counter
+    _w5500_workaround_counter = 0;
     if (_esp32_ta)
     {
         delete _esp32_ta;
@@ -2042,6 +2049,8 @@ void BSSL_SSL_Client::mClear()
     _cipher_cnt = 0;
     _tls_min = BR_TLS10;
     _tls_max = BR_TLS12;
+    // Reset W5500 workaround counter
+    _w5500_workaround_counter = 0;
     if (_esp32_ta)
     {
         delete _esp32_ta;
@@ -2107,6 +2116,8 @@ bool BSSL_SSL_Client::mInstallClientX509Validator()
 #endif
             return false;
         }
+    // Reset W5500 workaround counter
+    _w5500_workaround_counter = 0;
         if (_esp32_ta)
         {
             br_x509_minimal_init(_x509_minimal.get(), &br_sha256_vtable, _esp32_ta->getTrustAnchors(), _esp32_ta->getCount());

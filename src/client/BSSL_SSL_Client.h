@@ -310,6 +310,9 @@ private:
     uint16_t _port = 0;
     IPAddress _ip;
     bool _connect_with_ip = false;
+
+    // W5500 workaround: counter for handling false negative -1 returns during handshake
+    int _w5500_workaround_counter = 0;
 };
 
 #endif
