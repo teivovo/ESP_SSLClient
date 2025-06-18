@@ -32,6 +32,7 @@ This library is fully compatible and able to work with [ESP-Mail-Client](https:/
  
  ### Supposted Networking Devices with Client (with driver) library.
 
+ * **WIZnet W5500 series modules** (with built-in compatibility patch)
  * WIZnet Wxxx series modules
  * All SPI Ethernet modules
  * All GSM modules
@@ -64,6 +65,91 @@ The SPI Ethernet module that uses WIZNet W5100, W5500 and ENC28J60 are supported
 
 * **Supports the authentications as in WiFiClientSecure.**
 
+* **Built-in W5500 Ethernet Controller Compatibility.**
+
+
+## W5500 Ethernet Controller Compatibility
+
+This library includes **built-in compatibility** for the **W5500 Ethernet controller**, addressing a known hardware-specific issue where the W5500 returns `-1` during busy periods, which can cause SSL handshake failures.
+
+### Automatic W5500 Support
+
+The W5500 compatibility patch is **automatically activated** when:
+- The W5500 library is included in your project (`#include <Ethernet.h>` with W5500)
+- The `_W5500_H_` preprocessor definition is detected
+- Or manually enabled with `#define W5500_WORKAROUND` before including ESP_SSLClient
+
+### How It Works
+
+The W5500 Ethernet controller occasionally returns `-1` from write operations when the controller is busy processing data. This is not a real error condition, but rather the controller indicating "try again later." Without proper handling, this causes SSL connections to fail prematurely.
+
+ESP_SSLClient automatically detects and handles these false negative returns by:
+1. **Detecting W5500 busy conditions** during SSL socket write operations
+2. **Retrying the operation** up to 200 times when `-1` is returned
+3. **Continuing normal operation** once the controller is ready
+4. **Zero overhead** when W5500 is not used
+
+### Supported W5500 Scenarios
+
+- ✅ **SSL/TLS Handshakes** - Prevents handshake failures during initial connection
+- ✅ **Data Transmission** - Handles busy conditions during ongoing SSL communication
+- ✅ **All SSL Operations** - Comprehensive coverage for any W5500 busy condition
+- ✅ **iDirect Modems** - Specifically tested with iDirect satellite modems using W5500
+- ✅ **High-throughput Applications** - Maintains performance under heavy network load
+
+### Usage Example with W5500
+
+```cpp
+#include <SPI.h>
+#include <Ethernet.h>        // W5500 support - automatically enables compatibility
+#include <ESP_SSLClient.h>
+
+// W5500 pin configuration
+#define W5500_CS_PIN 5
+#define W5500_RST_PIN 33
+
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress ip(192, 168, 1, 100);
+
+EthernetClient eth_client;
+ESP_SSLClient ssl_client;
+
+void setup() {
+  // Initialize W5500
+  Ethernet.init(W5500_CS_PIN);
+  Ethernet.begin(mac, ip);
+
+  // Configure SSL client
+  ssl_client.setInsecure();  // For self-signed certificates
+  ssl_client.setClient(&eth_client);
+
+  // W5500 compatibility is automatically active!
+  // Connect to HTTPS server
+  if (ssl_client.connect("example.com", 443)) {
+    Serial.println("W5500 SSL connection successful!");
+    // Your HTTPS communication here
+  }
+}
+```
+
+### Technical Details
+
+- **Activation**: Automatic when `_W5500_H_` is defined or `W5500_WORKAROUND` is manually defined
+- **Retry Limit**: Maximum 200 retry attempts per write operation
+- **Memory Overhead**: Only 4 bytes (int counter) when W5500 is used, zero when not used
+- **Performance Impact**: Negligible - only activates during actual W5500 busy conditions
+- **Compatibility**: Works with all ESP_SSLClient features and authentication methods
+
+### Debug Information
+
+When debug level is set to `esp_ssl_debug_info` or higher, W5500 workaround activations are logged:
+
+```cpp
+ssl_client.setDebugLevel(esp_ssl_debug_info);
+// Output: "W5500 workaround: treating -1 as non-error, attempt X"
+```
+
+This feature ensures reliable SSL/TLS communication with W5500-based Ethernet solutions without requiring any code changes from the user.
 
 
 ## Basic Usage
